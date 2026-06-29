@@ -38,18 +38,14 @@ async function processTrc20Events(walletId, walletAddress, events, currentBlock)
 
     // Deduplicate: skip if already stored
     const [existing] = await pool.query(
-      'SELECT id FROM transactions WHERE tx_hash = ?', [txHash]
-    );
-    if (existing.length > 0) {
-      // Update confirmations on existing pending rows
-      const blockNumber = ev.block_timestamp
-        ? null  // TronGrid TRC20 events don't always include block_number directly
-        : null;
+  'SELECT id FROM transactions WHERE tx_hash = ?',
+  [txHash]
+);
 
-      // We'll re-check confirmations in a separate pass
-      continue;
-    }
-
+if (existing.length > 0) {
+    
+    continue;
+}
     const rawAmount = ev.value || '0';
     const amountUsdt = Number(rawAmount) / 1_000_000;
 
@@ -184,7 +180,12 @@ async function runPollCycle() {
         ? new Date(wallet.last_deposit_at).getTime() - 60_000  // 1 min buffer
         : Date.now() - 7 * 24 * 60 * 60 * 1000;               // default: last 7 days
 
-      const events = await getIncomingUsdtTransfers(wallet.address, sinceMs);
+      const events = await getIncomingUsdtTransfers(wallet.address, 0);
+      logger.info("Fetched events", {
+    wallet: wallet.address,
+    count: events.length,
+    since: sinceMs
+});
       if (events.length > 0) {
         await processTrc20Events(wallet.id, wallet.address, events, currentBlock);
       }

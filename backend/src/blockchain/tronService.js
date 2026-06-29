@@ -28,9 +28,16 @@ async function getTrxBalance(address) {
     const sun = await tronWeb.trx.getBalance(address);
     return sun / 1_000_000;
   } catch (err) {
-    logger.error('getTrxBalance failed', { address, error: err.message });
-    return 0;
-  }
+  console.error("TRX BALANCE ERROR:");
+  console.error(err);
+
+  logger.error('getTrxBalance failed', {
+    address,
+    error: err.message
+  });
+
+  return 0;
+}
 }
 
 /**
@@ -39,7 +46,9 @@ async function getTrxBalance(address) {
 async function getUsdtBalance(address) {
   try {
     const contract = await tronWeb.contract().at(USDT_CONTRACT);
-    const rawBalance = await contract.balanceOf(address).call();
+    const rawBalance = await contract.balanceOf(address).call({
+    from: address
+});
     return Number(rawBalance.toString()) / Math.pow(10, USDT_DECIMALS);
   } catch (err) {
     logger.error('getUsdtBalance failed', { address, error: err.message });

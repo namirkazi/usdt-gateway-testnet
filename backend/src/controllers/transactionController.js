@@ -119,14 +119,20 @@ async function sweepWallet(req, res) {
     }
 
     // Mark all confirmed transactions for this wallet as 'sweeping'
-    await conn.query(
-      `UPDATE transactions
-       SET status = 'sweeping', updated_at = NOW()
-       WHERE wallet_id = ? AND status = 'confirmed'`,
-      [walletId]
-    );
+const [updateResult] = await conn.query(
+  `UPDATE transactions
+   SET status = 'sweeping',
+       updated_at = NOW()
+   WHERE wallet_id = ?
+     AND status = 'confirmed'`,
+  [walletId]
+);
+logger.info("Transactions marked for sweeping", {
+  walletId,
+  affectedRows: updateResult.affectedRows
+});
 
-    await conn.commit();
+await conn.commit();
 
     // ── Perform the on-chain transfer (outside the DB transaction) ──
     let sweepResult;
@@ -149,15 +155,22 @@ async function sweepWallet(req, res) {
     }
 
     // ── Persist the successful sweep ────────────────────────────
-    await pool.query(
-      `UPDATE transactions
-       SET status = 'swept',
-           sweep_tx_hash = ?,
-           swept_at = NOW(),
-           updated_at = NOW()
-       WHERE wallet_id = ? AND status = 'sweeping'`,
-      [sweepResult.txHash, walletId]
-    );
+    const [sweepUpdate] = await pool.query(
+  `UPDATE transactions
+   SET status = 'swept',
+       sweep_tx_hash = ?,
+       swept_at = NOW(),
+       updated_at = NOW()
+   WHERE wallet_id = ?
+     AND status = 'sweeping'`,
+  [sweepResult.txHash, walletId]
+);
+
+logger.info("Transactions marked as swept", {
+  walletId,
+  affectedRows: sweepUpdate.affectedRows,
+  txHash: sweepResult.txHash
+});
 
     // Zero out the cached balance
     await pool.query(
@@ -179,12 +192,17 @@ async function sweepWallet(req, res) {
       to:          'TREASURY (hidden)',
     }, 200, 'Sweep successful');
   } catch (err) {
-    await conn.rollback().catch(() => {});
-    logger.error('sweepWallet error', { error: err.message });
-    return error(res, 'Server error during sweep', 500);
-  } finally {
-    conn.release();
-  }
+  await conn.rollback().catch(() => {});
+
+  logger.error('sweepWallet error', {
+    error: err.message,
+    stack: err.stack
+  });
+
+  return error(res, err.message, 500);
+} finally {
+  conn.release();
+}
 }
 
 module.exports = { listTransactions, getTransaction, sweepWallet };
