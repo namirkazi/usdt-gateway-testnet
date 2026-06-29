@@ -1,304 +1,345 @@
-# USDT TRC20 Payment Gateway — Phase 1
+# TRON USDT Payment Gateway (Nile Testnet)
 
-A production-quality cryptocurrency payment gateway that accepts USDT on the Tron network (TRC20) via temporary deposit wallets. The treasury/Ownbit wallet address is **never exposed** to the public or to the frontend.
+> A full-stack cryptocurrency payment gateway built with **Node.js**, **Express**, **React**, and **MySQL** that accepts **TRC20 USDT** deposits on the **TRON Nile Testnet**. The project demonstrates secure wallet management, blockchain monitoring, transaction tracking, and treasury sweeping.
 
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        BROWSER (React)                          │
-│  LoginPage → Dashboard → WalletsPage → TransactionsPage         │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │  JWT-authenticated REST API
-┌──────────────────────────▼──────────────────────────────────────┐
-│                     EXPRESS API (Node.js)                        │
-│                                                                  │
-│  /api/auth          → authController                            │
-│  /api/wallets       → walletController                          │
-│  /api/transactions  → transactionController                     │
-│                                                                  │
-│  Background Monitor (node-cron / setInterval)                   │
-│    └── Polls TronGrid every 30s for incoming TRC20 transfers    │
-└───────────┬──────────────────────────┬──────────────────────────┘
-            │                          │
-    ┌───────▼───────┐        ┌─────────▼──────────────┐
-    │     MySQL     │        │   Tron Blockchain       │
-    │  admins       │        │   (via TronGrid API)    │
-    │  wallets      │        │                         │
-    │  transactions │        │  Read: balances, events │
-    │  settings     │        │  Write: sweep tx only   │
-    └───────────────┘        └─────────────────────────┘
-```
-
-### Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| **One active wallet at a time** | Prevents customer confusion; old wallets stay monitored for late deposits |
-| **Private keys encrypted at rest** | AES-256 via `crypto-js`; decrypted in-memory only during sweep |
-| **Treasury address in `.env` only** | Never sent to frontend; never logged in combined.log; never in DB |
-| **Polling over webhooks** | Simpler to deploy; no static IP or public endpoint required; Phase 2 can swap to webhooks without changing persistence logic |
-| **tx_hash UNIQUE constraint** | Database-level deduplication prevents double-processing of events |
-| **DB transaction on sweep** | Prevents double-sweep via row-level lock (`FOR UPDATE`) |
-| **JWT bearer tokens** | Stateless; easy to integrate in Phase 2 with multi-user roles |
-| **Clean controller/service/blockchain layers** | Blockchain code has zero DB knowledge; easy to mock for tests |
+> **Disclaimer**
+>
+> This project is intended for educational purposes and blockchain development. It has **not** been security audited and should **not** be used to custody real funds without additional security review and production hardening.
 
 ---
 
-## Project Structure
+# Features
+
+* Generate unique TRON deposit wallets
+* Monitor incoming TRC20 USDT deposits
+* Automatic blockchain confirmation tracking
+* Manual treasury sweeping
+* AES-256 encrypted private key storage
+* Live TRX and USDT balance monitoring
+* Transaction history with confirmation status
+* JWT authentication
+* MySQL transaction persistence
+* Background blockchain polling
+* RESTful API
+* React administration dashboard
+
+---
+
+# Architecture
 
 ```
-usdt-gateway/
-├── backend/
-│   ├── src/
-│   │   ├── index.js                 # App entry point
-│   │   ├── config/
-│   │   │   ├── database.js          # MySQL pool
-│   │   │   ├── tron.js              # TronWeb singleton
-│   │   │   └── logger.js            # Winston logger
-│   │   ├── database/
-│   │   │   ├── migrate.js           # CREATE TABLE scripts
-│   │   │   └── seed.js              # Admin account seeder
-│   │   ├── middleware/
-│   │   │   ├── auth.js              # JWT verification
-│   │   │   └── rateLimiter.js       # express-rate-limit
-│   │   ├── controllers/
-│   │   │   ├── authController.js
-│   │   │   ├── walletController.js
-│   │   │   └── transactionController.js
-│   │   ├── routes/
-│   │   │   ├── index.js
-│   │   │   ├── auth.js
-│   │   │   ├── wallets.js
-│   │   │   └── transactions.js
-│   │   ├── blockchain/
-│   │   │   ├── tronService.js       # Pure blockchain operations
-│   │   │   └── monitor.js           # Background polling engine
-│   │   └── utils/
-│   │       ├── crypto.js            # AES encrypt/decrypt
-│   │       └── response.js          # Standardized API envelope
-│   ├── logs/                        # Auto-created
-│   ├── .env.example
+                    Customer Wallet
+                           │
+                           ▼
+                 Temporary Deposit Wallet
+                           │
+                           ▼
+                Background Blockchain Monitor
+                           │
+                           ▼
+                        MySQL Database
+                           │
+                           ▼
+                 Treasury (Cold) Wallet
+```
+
+The gateway continuously monitors the TRON blockchain for incoming USDT deposits. Once a transaction reaches the required confirmation threshold, it can be swept securely into the treasury wallet while maintaining a complete transaction history.
+
+---
+
+# Technology Stack
+
+### Backend
+
+* Node.js
+* Express.js
+* MySQL
+* TronWeb
+* TronGrid API
+* JWT Authentication
+* Crypto-JS
+* Winston Logger
+
+### Frontend
+
+* React
+* Vite
+* Axios
+* Tailwind CSS
+
+---
+
+# Project Structure
+
+```
+usdt-gateway
+│
+├── backend
+│   ├── src
+│   │   ├── blockchain
+│   │   ├── config
+│   │   ├── controllers
+│   │   ├── database
+│   │   ├── middleware
+│   │   ├── routes
+│   │   └── utils
+│   ├── logs
 │   └── package.json
-└── frontend/
-    ├── src/
-    │   ├── main.jsx
-    │   ├── App.jsx
-    │   ├── index.css
-    │   ├── api/
-    │   │   └── client.js            # Axios + all API calls
-    │   ├── contexts/
-    │   │   └── AuthContext.jsx      # Global auth state
-    │   ├── components/
-    │   │   └── Layout.jsx           # Sidebar + shell
-    │   └── pages/
-    │       ├── LoginPage.jsx
-    │       ├── DashboardPage.jsx    # Main command center
-    │       ├── WalletsPage.jsx
-    │       └── TransactionsPage.jsx
-    ├── index.html
-    ├── vite.config.js
-    ├── tailwind.config.js
-    └── package.json
+│
+├── frontend
+│   ├── src
+│   ├── public
+│   └── package.json
+│
+└── README.md
 ```
 
 ---
 
-## Prerequisites
+# How It Works
 
-- **Node.js** ≥ 18
-- **MySQL** 8.x (or MariaDB 10.6+)
-- **TronGrid API key** — free at https://www.trongrid.io/
-- **A Tron wallet** for your treasury (Ownbit or any cold wallet)
-- **TRX in each deposit wallet** — TRC20 transfers cost ~15 TRX in bandwidth/energy. You must keep a small TRX balance in each deposit wallet for the sweep to succeed. Fund each wallet with ~20–30 TRX after generating it.
+1. Generate a temporary deposit wallet.
+2. Share the generated wallet address with the customer.
+3. The customer sends TRC20 USDT.
+4. The blockchain monitor detects the transaction.
+5. Confirmations are tracked automatically.
+6. After confirmation, funds can be swept to the treasury wallet.
+7. The sweep transaction is recorded for auditing.
 
 ---
 
-## Setup
+# Security
 
-### 1. Clone & Install
+This project implements several security practices:
+
+* AES-256 encrypted private keys
+* JWT authentication
+* Password hashing
+* Database transaction locking
+* Duplicate transaction protection using unique transaction hashes
+* Treasury wallet never exposed to the frontend
+* Structured application logging
+* Environment variable configuration
+* Rate limiting
+* Helmet security headers
+* CORS protection
+
+---
+
+# Getting Started
+
+## Clone the Repository
 
 ```bash
-# Backend
-cd backend
-npm install
+git clone https://github.com/<your-username>/tron-usdt-payment-gateway.git
 
-# Frontend
-cd ../frontend
+cd tron-usdt-payment-gateway
+```
+
+---
+
+## Backend
+
+```bash
+cd backend
+
 npm install
 ```
 
-### 2. Configure Environment
+Create a `.env` file using `.env.example`.
 
-```bash
-cd backend
-cp .env.example .env
-```
-
-Edit `.env` with your values. Critical fields:
+Example:
 
 ```env
-# Generate JWT secret:
-# node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-JWT_SECRET=...
+PORT=4000
 
-# Generate encryption key (32+ chars):
-# node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-ENCRYPTION_KEY=...
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=usdt_gateway
 
-# Your Ownbit cold wallet — NEVER expose this publicly
-TREASURY_ADDRESS=T...
+DB_USER=root
+DB_PASSWORD=
 
-# Free API key from trongrid.io
-TRONGRID_API_KEY=...
+JWT_SECRET=YOUR_SECRET
+
+ENCRYPTION_KEY=YOUR_KEY
+
+TRON_FULL_NODE=https://api.nileex.io
+
+TRONGRID_API_KEY=
+
+USDT_CONTRACT_ADDRESS=TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf
+
+TREASURY_ADDRESS=YOUR_TESTNET_WALLET
 ```
 
-### 3. Create Database
-
-```sql
-CREATE DATABASE usdt_gateway CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-### 4. Run Migrations & Seed
+Run the database migration:
 
 ```bash
-cd backend
 node src/database/migrate.js
+```
+
+Seed the administrator account:
+
+```bash
 node src/database/seed.js
 ```
 
-### 5. Start Development
+Start the backend:
 
 ```bash
-# Terminal 1 — Backend
-cd backend
 npm run dev
-
-# Terminal 2 — Frontend
-cd frontend
-npm run dev
-```
-
-Open **http://localhost:3000** and log in with the credentials from your `.env`.
-
----
-
-## Production Deployment
-
-### Backend (PM2)
-
-```bash
-npm install -g pm2
-cd backend
-NODE_ENV=production pm2 start src/index.js --name usdt-gateway-api
-pm2 save
-pm2 startup
-```
-
-### Frontend (Nginx)
-
-```bash
-cd frontend
-npm run build
-# Copy dist/ to your web server root
-```
-
-Nginx config snippet:
-```nginx
-server {
-    listen 443 ssl;
-    server_name yourdomain.com;
-
-    root /var/www/usdt-gateway/dist;
-    index index.html;
-    try_files $uri $uri/ /index.html;
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
 ```
 
 ---
 
-## API Reference
+## Frontend
 
-All endpoints require `Authorization: Bearer <token>` except `/api/auth/login`.
+```bash
+cd frontend
 
-### Auth
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/auth/login` | Login → returns JWT |
-| GET | `/api/auth/me` | Verify token |
+npm install
+
+npm run dev
+```
+
+---
+
+# Database
+
+The application creates the following primary tables:
+
+* admins
+* wallets
+* transactions
+* settings
+
+---
+
+# Testing
+
+This project is configured for the **TRON Nile Testnet**.
+
+Requirements:
+
+* Nile TRX
+* Nile Test USDT
+* TronLink configured for Nile Testnet
+
+Typical testing flow:
+
+```
+Generate Wallet
+
+↓
+
+Fund Wallet with Test TRX
+
+↓
+
+Send Test USDT
+
+↓
+
+Wait for Confirmations
+
+↓
+
+Sweep to Treasury
+
+↓
+
+Verify Sweep Transaction
+```
+
+---
+
+# Current Status
+
+## Completed
+
+* Wallet generation
+* Deposit detection
+* Confirmation tracking
+* Manual treasury sweep
+* Transaction history
+* Live balance updates
+* JWT authentication
+* Background polling
+
+## Planned
+
+* Automatic wallet rotation
+* Automatic treasury sweeping
+* Webhook support
+* Multi-user roles
+* Docker deployment
+* CI/CD pipeline
+* Notification system
+* Dashboard analytics
+
+---
+
+# API
+
+### Authentication
+
+```
+POST /api/auth/login
+GET  /api/auth/me
+```
 
 ### Wallets
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/wallets/generate` | Generate new deposit wallet |
-| GET | `/api/wallets` | List all wallets |
-| GET | `/api/wallets/active` | Get active wallet + live balances + QR |
-| GET | `/api/wallets/stats` | Dashboard summary stats |
-| GET | `/api/wallets/:id/qr` | QR code for any wallet |
-| POST | `/api/wallets/:id/sweep` | Sweep USDT → treasury |
 
-### Transactions
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/transactions` | List (filter: status, wallet_id, limit, offset) |
-| GET | `/api/transactions/:id` | Single transaction |
+```
+POST /api/wallets/generate
 
----
+GET  /api/wallets
 
-## Security Checklist
+GET  /api/wallets/active
 
-- [x] Private keys AES-256 encrypted at rest
-- [x] Treasury address only in `.env`, never in API responses
-- [x] JWT authentication on all endpoints
-- [x] Rate limiting (10 login attempts / 15 min; 100 req/min general)
-- [x] Helmet security headers
-- [x] CORS restricted to configured frontend origin
-- [x] DB-level tx_hash unique constraint prevents double processing
-- [x] Row-level lock on sweep prevents concurrent double-sweeps
-- [x] Input validation via express-validator
-- [x] Winston structured logging (error + combined)
-- [x] Private key never logged
-- [x] Treasury address never logged in combined.log
-- [ ] HTTPS (configure via reverse proxy — Nginx + Let's Encrypt)
-- [ ] DB backups (schedule via cron)
-- [ ] Secrets management (consider Vault or AWS Secrets Manager for production)
+GET  /api/wallets/:id/qr
 
----
-
-## Important: Fund Deposit Wallets with TRX
-
-Every new deposit wallet needs TRX to pay for bandwidth/energy when sweeping. Without it, the sweep transaction will fail.
-
-**Recommended**: Send 20–30 TRX to each newly generated wallet before sharing the address with customers.
-
----
-
-## Phase 2 Roadmap
-
-These features are architecturally prepared but not yet implemented:
-
-- **Auto-sweep**: The `auto_sweep` setting in the `settings` table is already there; monitor.js just needs to call `sweepWallet` after confirmation threshold is met.
-- **Webhooks**: Replace the polling loop in `monitor.js` with a TronGrid webhook handler — the `processTrc20Events()` and `updateConfirmations()` functions stay unchanged.
-- **Multi-user**: `admins` table is ready; add a `role` column and user-scoped wallet assignment.
-- **Notifications**: Add a `notify_url` to `settings`; call it after each new deposit.
-- **Address rotation**: Expose a cron-based `generate` call in `monitor.js` to rotate the active wallet every N deposits or N hours.
-
----
-
-## Testing on Shasta Testnet
-
-Change `.env`:
-```env
-TRON_FULL_NODE=https://api.shasta.trongrid.io
-USDT_CONTRACT_ADDRESS=TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs
+POST /api/wallets/:id/sweep
 ```
 
-Get free Shasta TRX at https://www.trongrid.io/shasta and test USDT from the Shasta faucet.
+### Transactions
+
+```
+GET /api/transactions
+
+GET /api/transactions/:id
+```
+
+---
+
+# Future Improvements
+
+* HD Wallet support
+* Address rotation
+* Multiple cryptocurrency support
+* Automatic sweeping
+* Email notifications
+* Webhook integration
+* Multi-signature treasury wallets
+* Cold wallet management
+* Audit dashboard
+* Metrics and monitoring
+
+---
+
+# License
+
+This project is released under the MIT License.
+
+---
+
+# Author
+
+**Mohammed Namir Kazi**
+
+Engineering Student • Full Stack Developer • Blockchain Developer
+
+GitHub: https://github.com/namirkazi
+
+LinkedIn: https://www.linkedin.com/in/mohammed-namir-kazi
